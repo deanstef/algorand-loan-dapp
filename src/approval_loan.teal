@@ -1,0 +1,443 @@
+#pragma version 3
+// Loan Registers Application
+// Actors:
+//  1. Authority: Loan issuer(e.g. INPS - Italian Public Retirement System); represented as Algorand Standalone Account
+//  2. Employer: Can be any public administration (PA) body; represented as Algorand Standalone Account
+//  3. Employee: PA employee who applies for a loan; represented as Algorand Standalone Account
+// Elements:
+// - Employer Rights ASA: Each employee holds an affiliation token who demontrate its employment to a certain PA; represented as Algorand Standard Asset
+// - Loan Escrow Contract Account: escrow account for this loan; represented as the public key of a stateless contract
+
+// Global Variables:
+//  AuthorityAddr (byte)
+//  EmployerRightsId (uint)
+//  LoanThreshold (uint)
+//  LoanEscrow (byte)
+//  LoanFund (uint)
+
+// Local Variables:
+//  PaySlip (uint)
+//  RequiredLoan (uint)
+//  AuthorizedLoan (uint)
+//  ExistingLoan (uint)
+//  AuthorityKyc (uint)
+
+txn ApplicationID
+int 0
+==
+bnz branch_create
+txn OnCompletion
+int OptIn
+==
+bnz branch_opt_in
+txn OnCompletion
+int CloseOut
+==
+bnz branch_close_out
+txn OnCompletion
+int UpdateApplication
+==
+bnz branch_update
+txn OnCompletion
+int DeleteApplication
+==
+bnz branch_delete
+txn OnCompletion
+int NoOp
+==
+bnz branch_app_calls
+int 0
+return
+
+
+// Creation branch
+// Employer creates the application. AppCall arg 0 "addr:Authority"; Asset EmployerRights. Global variables initialised:
+//  AuthorityAddr (addr): Authority public key
+//  EmployerRightsId (uint): Stores globally the employer asset id
+branch_create:
+// TEAL2 logic
+// byte "Creator"
+// txn Sender
+// app_global_put
+// TEAL 3 the creator is stored into the 'global' opcode
+txn NumAppArgs
+int 1
+==
+bz branch_fail
+// Here should check whether arg 0 is of type 'addr'
+byte "AuthorityAddr"
+txna ApplicationArgs 0
+app_global_put
+txn NumAssets
+int 1
+==
+bz branch_fail
+int 0
+//GIL-COMMENT check this Opcode for ForeignAssets: read from asset Txn.ForeignAssets[A] params field X (imm arg) => {0 or 1 (top), value}
+asset_params_get AssetManager
+bz branch_fail // if Asset manager not present, fail.
+txn Sender
+==
+bz branch_fail // fail if the Employer who is creating the app is not the creatore of the provided Employer Rights Asset
+byte "EmployerRightsId"
+txn Assets 0
+app_global_put
+int 1
+return
+
+
+// OptIn branch
+// The Employee who wants to apply for a loan needs to opt-in into this application; the employee presents its Employer Rights ASA
+branch_opt_in:
+// TEAL 3
+txn NumAssets
+int 1
+==
+bz branch_fail
+byte "EmployerRightsId"
+app_global_get
+store 0
+load 0
+txn Assets 0
+==
+bz branch_fail // The employee presented the wrong Employer Rights ASA
+int 0 // Employee opting-in
+load 0 // Id of the Employer Rights ASA
+asset_holding_get AssetBalance
+bz branch_fail // fail if sender does not have the INPS ASA
+int 1
+==
+bz branch_fail
+int 1
+return
+
+
+// CloseOut branch
+//GIL-COMMENT we can add that only Employer can close-out, and Employee cannot
+branch_close_out:
+int 1
+return
+
+
+// Update branch
+branch_update:
+txn Sender
+// TEAL 3
+global CreatorAddress
+==
+bz branch_fail
+int 1
+return
+
+
+// Delete branch
+branch_delete:
+txn Sender
+// TEAL 3
+global CreatorAddress
+==
+bz branch_fail
+int 1
+return
+
+
+// AppCalls branch
+branch_app_calls:
+// 1. Contract setup: The Authority instantiates the global vars (via AppCall arguments) and founds the escrow account (Payment txn)
+// Atomic Transfer with two txns
+global GroupSize
+int 2
+==
+// The Authority is the sender of this "init" call
+byte "AuthorityAddr"
+app_global_get
+store 1
+load 1
+gtxn 0 Sender
+==
+&&
+gtxna 0 ApplicationArgs 0
+byte "Init"
+==
+&&
+bnz branch_loan_setup
+// 2. The Employer of a user opens a loan request in behalf of its Emoployee
+global GroupSize
+int 1
+==
+global CreatorAddress
+gtxn 0 Sender
+==
+&&
+gtxna 0 ApplicationArgs 0
+byte "Request"
+==
+&&
+bnz branch_loan_request
+// 3. The Authority checks the Employee rights (existring loans and KYC)
+//GIL-COMMENT what happen if the Authority does not send this AppCall? Can we merge step 2 with this step 3 in an Atomic Transfer
+//GIL-COMMENT actually here there isn't a check. The Authority adds information about Employee account, useful for following checks
+global GroupSize
+int 1
+==
+load 1 // load the Authority addr from scratch
+gtxn 0 Sender
+== // The sender of this transaction is the Authority account
+&&
+gtxna 0 ApplicationArgs 0
+byte "Check"
+==
+&&
+bnz branch_loan_check
+// 4. The Authority checks the variables and consequently authorizes the loan (and the payment).
+//Atomic transfer: AppCall + Payment txn
+global GroupSize
+int 2
+==
+// TEAL 3
+load 1 // load the Authority addr from scratch
+gtxn 0 Sender
+==
+&&
+gtxna 0 ApplicationArgs 0
+byte "Authorize"
+==
+&&
+bnz branch_loan_authorize // passa User addr in appcall, controlla che la chiave abbia fatto opt-in allo smart contract (vd check2 branch_loan_check)
+int 0
+return
+
+
+// 1. Loan Setup: Atomic Transfer with Application Call txn + Payment txn. Global variables:
+//  LoanThreshold (uint): AppCall arg 1; poverty threeshold that cannot be exceeded
+//  Loan Escrow Contract Account (byte): read from the Receiver of the Payment txn; public key of the Stateless Escrow Contract Account
+//  Loan Fund (uint): read from the Payment txn; amount of funds for this loan program
+branch_loan_setup:
+gtxn 0 NumAppArgs
+int 2
+==  // 2 args (arg 0 "str:Init")
+gtxn 1 TypeEnum
+int pay
+== // the second txn of this atomic transfer is a Payment txn
+&&
+//gtxn 1 Receiver
+//gtxna 0 ApplicationArgs 3
+//== // The Payment receiver is the Escrow Account specified in the AppCall arg 2 (non utile)
+//&&
+//gtxn 1 Amount
+//int 0
+//> // The Loan Fund must be greater than zero (serve una AppCall per fare update - aumentare/diminuire - del fondo); useless check
+//&&
+bnz loan_setup
+int 0
+return
+loan_setup:
+byte "LoanThreshold"
+gtxna 0 ApplicationArgs 1
+btoi
+app_global_put
+byte "LoanEscrow"
+gtxn 1 Receiver
+app_global_put
+byte "LoanFund"
+gtxn 1 Amount
+app_global_put
+int 1
+return
+
+
+// 2. Loan Request. The Employer opens a loan request for a specific Employee who applied for a loan. AppCall
+// with arg 0 "str:Request" and --app-account <addr:Employee>. The Employer (sender of this AppCall) sets the Employee local
+// state with the following variables:
+//  PaySlip (uint): AppCall arg 1; employee payslip
+//  RequiredLoan (uint): AppCall arg 2; Loan request from the employee
+//  AuthorizedLoan (uint): AppCall arg 3; Initially to 0
+branch_loan_request:
+// Check1. Sender dell'appcall sia il creatore dell'asset id 4. --> Not needed: The Sender is the AppCreator which is the
+// crerator of the Employer Rights stored in app (checked in Creation branch)
+// Check2. <User> ha fatto opt-in per questa app (indice 0). Prova ad usare TEAL 3 opcode 'assert'
+//GIL-COMMENT why gtxn Opcode if it is not an atomic transfer (i.e., GroupSize == 1)?
+//GIL-COMMENT manage here employee unfreezing of ASA? Or it is an unfreezed ASA?
+gtxn 0 NumAppArgs
+int 4
+==  // 4 args (arg 0 "str:Request")
+gtxna 0 ApplicationArgs 3 // AuthorizedLoan must be 0 when requested
+int 0
+==
+&&
+gtxn 0 NumAccounts
+int 1
+==
+&&
+assert
+int 1
+gtxn 0 ApplicationID
+app_opted_in
+// TEAL 3
+assert
+//GIL-COMMENT following 4 lines can be avoided with a bz branch_fail (or assert) after checking the number of accounts (2nd &&)
+//bnz loan_request
+//int 0
+//return
+//loan_request:
+int 1
+byte "Payslip"
+gtxna 0 ApplicationArgs 1
+btoi
+app_local_put
+int 1
+byte "RequiredLoan"
+gtxna 0 ApplicationArgs 2
+btoi
+app_local_put
+int 1
+byte "AuthorizedLoan"
+gtxna 0 ApplicationArgs 2
+btoi
+app_local_put
+int 1
+return
+
+
+// 3. Loan Check. Tha Authority condicts suitability checks on the Emoployee who requested a new loan. App Call with
+// 3 args and one --app-account <addr:Employee>. The Authority (Sender of this AppCall) writes two new variables on the
+// Employee's local state:
+//  ExistingLoan (uint): AppCall arg 1; the authority writes the amount of existing loans associated with the Emoploy
+// (if any, otherwise 0)
+//  AuthorityKyc (uint): AppCall arg 2; know your customer flag
+branch_loan_check:
+gtxn 0 NumAppArgs
+int 3
+==  // 3 args (arg 0 "str:Check")
+gtxna 0 ApplicationArgs 1
+int 0
+>= // Negative values not allowed for the ExistingLoans arg
+&&
+gtxn 0 NumAccounts
+int 1
+==
+&&
+assert
+//GIL-COMMENT why int 1? should be int 0
+int 1
+gtxn 0 ApplicationID
+app_opted_in
+// TEAL 3
+assert
+//&&
+//GIL-COMMENT same as step 2, following 4 lines can be removed with an assert after 2nd &&
+//bnz loan_check
+//int 0
+//return
+//loan_check:
+int 1
+byte "ExistingLoan"
+gtxna 0 ApplicationArgs 1
+btoi
+app_local_put
+int 1
+byte "AuthorityKyc"
+gtxna 0 ApplicationArgs 2
+btoi
+app_local_put
+int 1
+return
+
+
+// 4. Authorize Loan. The Authority completes all the required checks on the Employee and approves the payment of the loan.
+// AppCall with one --app-account <addr:Employee> + Payment txn from the Escrow Contract Account associtated with this app
+// to the Employee.
+branch_loan_authorize:
+//check1. controlla che la chiave abbia fatto opt-in allo smart contract (vd check2 branch_loan_check)
+//check2. txn 2 is a payment txn
+// check3. Sender of the payment txn is the Escrow
+gtxn 0 NumAppArgs
+int 1
+==  // 1 arg (arg 0 "str:Authorize")
+gtxn 0 NumAccounts
+int 1
+==
+&&
+int 1
+gtxn 0 ApplicationID
+app_opted_in
+// TEAL 3
+assert
+gtxn 1 TypeEnum
+int pay
+==
+&&
+gtxn 1 Sender
+byte "LoanEscrow"
+app_global_get
+==
+&&
+assert
+//GIL-COMMENT following 4 lines can be removed
+//bnz loan_authorize
+//int 0
+//return
+//loan_authorize:
+//GIL-COMMENT should be int 0
+int 1
+byte "AuthorizedLoan"
+app_local_get
+int 0
+==
+bz branch_fail // AuthorizedLoan needs to be 0 (authorized loans cannot be re-authorized)
+int 1
+byte "AuthorityKyc"
+app_local_get
+int 1
+==
+bz branch_fail
+int 1
+byte "RequiredLoan"
+app_local_get
+store 2
+//GIL-COMMENT load 2 otherwise error
+load 2
+int 1
+byte "ExistingLoan"
+app_local_get
++
+int 1
+byte "PaySlip"
+app_local_get
+//GIL-COMMENT swap, because OpCode - is: A minus B, with B on top of the stack
+swap
+-
+byte "LoanThreshold"
+app_global_get
+<=
+//GIL-COMMENT this check should be changed, e.g. payslip 1000£ and required loan 20000£.
+//Payslip can be multiplied by 12 OR loan divided by 12
+bz branch_fail // LoanThreshold <= PaySlip - (RequiredLoan + ExistingLoan)
+load 2
+int 2
+*
+byte "LoanFund"
+app_global_get
+store 3
+load 3
+//GIL-COMMENT changed with <, checks whether 2*RequiredLoan is less than LoanFund
+<
+bz branch_fail // 2*RequiredLoan >= LoanFund
+// All checks passed. Update AuthorizedLoan and LoanFund variables and authorize the payment
+byte "LoanFund"
+load 3
+load 2
+-
+app_global_put // update the LoanFund variable
+int 1
+byte "AuthorizedLoan"
+load 2
+app_local_put // update local variable AuthorizedLoan of the employee with the RequiredLoan value
+int 1
+return
+
+
+// Failure branch
+branch_fail:
+int 0
+return

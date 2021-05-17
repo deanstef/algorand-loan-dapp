@@ -1,0 +1,41 @@
+#pragma version 3
+
+// Asset Escrow Contract Account for the emission of Loans.
+// Tha Authorities create escrow account and deposit a certain amount of funds that can be withdrawed by Employee accounts
+// This contract only approves ALGO withdrowals if and only if withdrawals transactions are submitted as Atomic Transfer
+// composed by 2 transactions, that:
+//  1. The first is an AppCall to the Statefull Loan Application, ensuring only authorized withdrawals;
+//  2. The second is a Payment txn that transfers the right amount of ALGO from the Asset Escrow Account to the Employee
+
+gtxn 0 TypeEnum
+int appl
+==
+gtxn 0 ApplicationID
+int 6 // Loan App ID
+==
+&&
+gtxn 0 OnCompletion
+int NoOp
+==
+&&
+gtxn 1 TypeEnum
+int pay
+==
+&&
+//gtxn 1 FirstValid     should we check the expiration?
+//int xxxx
+//<=
+gtxn 1 Fee
+int 1000
+<=
+&&
+
+// Should we also check the amount even if it has been already checked in the statefull loan app?
+
+gtxn 1 CloseRemainderTo
+global ZeroAddress
+==
+gtxn 1 RekeyTo
+global ZeroAddress
+==
+&&
