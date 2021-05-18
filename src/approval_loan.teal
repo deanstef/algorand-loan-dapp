@@ -22,6 +22,9 @@
 //  ExistingLoan (uint)
 //  AuthorityKyc (uint)
 
+// TODO: Specify the loan period (rounds). e.g. Loan of 800$/month for 12 months. Can be used in mobination with the
+// recurring withdrowal payment.
+
 txn ApplicationID
 int 0
 ==
@@ -175,8 +178,6 @@ byte "Request"
 &&
 bnz branch_loan_request
 // 3. The Authority checks the Employee rights (existring loans and KYC)
-//GIL-COMMENT what happen if the Authority does not send this AppCall? Can we merge step 2 with this step 3 in an Atomic Transfer
-//GIL-COMMENT actually here there isn't a check. The Authority adds information about Employee account, useful for following checks
 global GroupSize
 int 1
 ==
@@ -253,15 +254,12 @@ return
 //  RequiredLoan (uint): AppCall arg 2; Loan request from the employee
 //  AuthorizedLoan (uint): AppCall arg 3; Initially to 0
 branch_loan_request:
-// Check1. Sender dell'appcall sia il creatore dell'asset id 4. --> Not needed: The Sender is the AppCreator which is the
-// crerator of the Employer Rights stored in app (checked in Creation branch)
-// Check2. <User> ha fatto opt-in per questa app (indice 0). Prova ad usare TEAL 3 opcode 'assert'
 //GIL-COMMENT why gtxn Opcode if it is not an atomic transfer (i.e., GroupSize == 1)?
-//GIL-COMMENT manage here employee unfreezing of ASA? Or it is an unfreezed ASA?
 gtxn 0 NumAppArgs
 int 4
 ==  // 4 args (arg 0 "str:Request")
 gtxna 0 ApplicationArgs 3 // AuthorizedLoan must be 0 when requested
+btoi
 int 0
 ==
 &&
@@ -292,16 +290,16 @@ btoi
 app_local_put
 int 1
 byte "AuthorizedLoan"
-gtxna 0 ApplicationArgs 2
+gtxna 0 ApplicationArgs 3
 btoi
 app_local_put
 int 1
 return
 
 
-// 3. Loan Check. Tha Authority condicts suitability checks on the Emoployee who requested a new loan. App Call with
-// 3 args and one --app-account <addr:Employee>. The Authority (Sender of this AppCall) writes two new variables on the
-// Employee's local state:
+// 3. Loan Check. Tha Authority conducts suitability checks on the Emoployee asking for a new loan. App Call with
+// 3 args (arg 0 "str:Check") and one --app-account <addr:Employee>. The Authority (Sender of this AppCall) writes two
+// new variables on the Employee's local state:
 //  ExistingLoan (uint): AppCall arg 1; the authority writes the amount of existing loans associated with the Emoploy
 // (if any, otherwise 0)
 //  AuthorityKyc (uint): AppCall arg 2; know your customer flag
@@ -310,6 +308,7 @@ gtxn 0 NumAppArgs
 int 3
 ==  // 3 args (arg 0 "str:Check")
 gtxna 0 ApplicationArgs 1
+btoi
 int 0
 >= // Negative values not allowed for the ExistingLoans arg
 &&
@@ -317,8 +316,8 @@ gtxn 0 NumAccounts
 int 1
 ==
 &&
+// TEAL 3
 assert
-//GIL-COMMENT why int 1? should be int 0
 int 1
 gtxn 0 ApplicationID
 app_opted_in
@@ -372,13 +371,20 @@ byte "LoanEscrow"
 app_global_get
 ==
 &&
+gtxn 1 Amount
+int 1
+byte "RequiredLoan"
+app_local_get
+store 2
+load 2
+==
+&&
 assert
 //GIL-COMMENT following 4 lines can be removed
 //bnz loan_authorize
 //int 0
 //return
 //loan_authorize:
-//GIL-COMMENT should be int 0
 int 1
 byte "AuthorizedLoan"
 app_local_get
@@ -391,27 +397,26 @@ app_local_get
 int 1
 ==
 bz branch_fail
-int 1
-byte "RequiredLoan"
-app_local_get
-store 2
-//GIL-COMMENT load 2 otherwise error
+//int 1
+//byte "RequiredLoan"
+//app_local_get
+//store 2
 load 2
 int 1
 byte "ExistingLoan"
 app_local_get
 +
 int 1
-byte "PaySlip"
+byte "Payslip"
 app_local_get
 //GIL-COMMENT swap, because OpCode - is: A minus B, with B on top of the stack
 swap
 -
 byte "LoanThreshold"
 app_global_get
-<=
-//GIL-COMMENT this check should be changed, e.g. payslip 1000£ and required loan 20000£.
-//Payslip can be multiplied by 12 OR loan divided by 12
+>=
+//GIL-COMMENT this check could be changed, e.g. payslip 1000£ and required loan 20000£.
+//in that case Payslip can be multiplied by 12 OR loan divided by 12
 bz branch_fail // LoanThreshold <= PaySlip - (RequiredLoan + ExistingLoan)
 load 2
 int 2
@@ -420,7 +425,7 @@ byte "LoanFund"
 app_global_get
 store 3
 load 3
-//GIL-COMMENT changed with <, checks whether 2*RequiredLoan is less than LoanFund
+//Security deposit check: 2*RequiredLoan < LoanFund
 <
 bz branch_fail // 2*RequiredLoan >= LoanFund
 // All checks passed. Update AuthorizedLoan and LoanFund variables and authorize the payment

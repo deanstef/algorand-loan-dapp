@@ -31,10 +31,10 @@ int 1000
 &&
 
 // Should we also check the amount even if it has been already checked in the statefull loan app?
-
 gtxn 1 CloseRemainderTo
 global ZeroAddress
 ==
+&&
 gtxn 1 RekeyTo
 global ZeroAddress
 ==
