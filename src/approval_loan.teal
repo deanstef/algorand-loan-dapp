@@ -22,9 +22,6 @@
 //  ExistingLoan (uint)
 //  AuthorityKyc (uint)
 
-// TODO: Specify the loan period (rounds). e.g. Loan of 800$/month for 12 months. Can be used in mobination with the
-// recurring withdrowal payment.
-
 txn ApplicationID
 int 0
 ==
@@ -55,8 +52,8 @@ return
 
 // Creation branch
 // Employer creates the application. AppCall arg 0 "addr:Authority"; Asset EmployerRights. Global variables initialised:
-//  AuthorityAddr (addr): Authority public key
-//  EmployerRightsId (uint): Stores globally the employer asset id
+// AuthorityAddr (addr): Authority public key
+// EmployerRightsId (uint): Stores globally the employer asset id
 branch_create:
 // TEAL2 logic
 // byte "Creator"
@@ -67,7 +64,6 @@ txn NumAppArgs
 int 1
 ==
 bz branch_fail
-// Here should check whether arg 0 is of type 'addr'
 byte "AuthorityAddr"
 txna ApplicationArgs 0
 app_global_put
@@ -76,12 +72,11 @@ int 1
 ==
 bz branch_fail
 int 0
-//GIL-COMMENT check this Opcode for ForeignAssets: read from asset Txn.ForeignAssets[A] params field X (imm arg) => {0 or 1 (top), value}
 asset_params_get AssetManager
-bz branch_fail // if Asset manager not present, fail.
+bz branch_fail
 txn Sender
 ==
-bz branch_fail // fail if the Employer who is creating the app is not the creatore of the provided Employer Rights Asset
+bz branch_fail // fail if the Employer who is creating the app is not the creator of the provided Employer Rights Asset
 byte "EmployerRightsId"
 txn Assets 0
 app_global_put
@@ -107,7 +102,7 @@ bz branch_fail // The employee presented the wrong Employer Rights ASA
 int 0 // Employee opting-in
 load 0 // Id of the Employer Rights ASA
 asset_holding_get AssetBalance
-bz branch_fail // fail if sender does not have the INPS ASA
+bz branch_fail // fail if sender does not have the Employer ASA
 int 1
 ==
 bz branch_fail
@@ -116,7 +111,6 @@ return
 
 
 // CloseOut branch
-//GIL-COMMENT we can add that only Employer can close-out, and Employee cannot
 branch_close_out:
 int 1
 return
@@ -151,7 +145,6 @@ branch_app_calls:
 global GroupSize
 int 2
 ==
-// The Authority is the sender of this "init" call
 byte "AuthorityAddr"
 app_global_get
 store 1
@@ -164,7 +157,7 @@ byte "Init"
 ==
 &&
 bnz branch_loan_setup
-// 2. The Employer of a user opens a loan request in behalf of its Emoployee
+// 2. The Employer of a user opens a loan request on behalf of his Emoployee
 global GroupSize
 int 1
 ==
@@ -177,7 +170,7 @@ byte "Request"
 ==
 &&
 bnz branch_loan_request
-// 3. The Authority checks the Employee rights (existring loans and KYC)
+// 3. The Authority checks the Employee rights, existring loans and the KYC
 global GroupSize
 int 1
 ==
@@ -204,7 +197,7 @@ gtxna 0 ApplicationArgs 0
 byte "Authorize"
 ==
 &&
-bnz branch_loan_authorize // passa User addr in appcall, controlla che la chiave abbia fatto opt-in allo smart contract (vd check2 branch_loan_check)
+bnz branch_loan_authorize
 int 0
 return
 
@@ -221,14 +214,6 @@ gtxn 1 TypeEnum
 int pay
 == // the second txn of this atomic transfer is a Payment txn
 &&
-//gtxn 1 Receiver
-//gtxna 0 ApplicationArgs 3
-//== // The Payment receiver is the Escrow Account specified in the AppCall arg 2 (non utile)
-//&&
-//gtxn 1 Amount
-//int 0
-//> // The Loan Fund must be greater than zero (serve una AppCall per fare update - aumentare/diminuire - del fondo); useless check
-//&&
 bnz loan_setup
 int 0
 return
@@ -252,9 +237,8 @@ return
 // state with the following variables:
 //  PaySlip (uint): AppCall arg 1; employee payslip
 //  RequiredLoan (uint): AppCall arg 2; Loan request from the employee
-//  AuthorizedLoan (uint): AppCall arg 3; Initially to 0
+//  AuthorizedLoan (uint): AppCall arg 3; Initially set to 0
 branch_loan_request:
-//GIL-COMMENT why gtxn Opcode if it is not an atomic transfer (i.e., GroupSize == 1)?
 gtxn 0 NumAppArgs
 int 4
 ==  // 4 args (arg 0 "str:Request")
@@ -273,11 +257,6 @@ gtxn 0 ApplicationID
 app_opted_in
 // TEAL 3
 assert
-//GIL-COMMENT following 4 lines can be avoided with a bz branch_fail (or assert) after checking the number of accounts (2nd &&)
-//bnz loan_request
-//int 0
-//return
-//loan_request:
 int 1
 byte "Payslip"
 gtxna 0 ApplicationArgs 1
@@ -323,12 +302,6 @@ gtxn 0 ApplicationID
 app_opted_in
 // TEAL 3
 assert
-//&&
-//GIL-COMMENT same as step 2, following 4 lines can be removed with an assert after 2nd &&
-//bnz loan_check
-//int 0
-//return
-//loan_check:
 int 1
 byte "ExistingLoan"
 gtxna 0 ApplicationArgs 1
@@ -347,9 +320,6 @@ return
 // AppCall with one --app-account <addr:Employee> + Payment txn from the Escrow Contract Account associtated with this app
 // to the Employee.
 branch_loan_authorize:
-//check1. controlla che la chiave abbia fatto opt-in allo smart contract (vd check2 branch_loan_check)
-//check2. txn 2 is a payment txn
-// check3. Sender of the payment txn is the Escrow
 gtxn 0 NumAppArgs
 int 1
 ==  // 1 arg (arg 0 "str:Authorize")
@@ -380,11 +350,6 @@ load 2
 ==
 &&
 assert
-//GIL-COMMENT following 4 lines can be removed
-//bnz loan_authorize
-//int 0
-//return
-//loan_authorize:
 int 1
 byte "AuthorizedLoan"
 app_local_get
@@ -397,11 +362,9 @@ app_local_get
 int 1
 ==
 bz branch_fail
-//int 1
-//byte "RequiredLoan"
-//app_local_get
-//store 2
 load 2
+int 12
+/ // RequiredLoan splitted into 12 instalments with 0 interests
 int 1
 byte "ExistingLoan"
 app_local_get
@@ -409,14 +372,11 @@ app_local_get
 int 1
 byte "Payslip"
 app_local_get
-//GIL-COMMENT swap, because OpCode - is: A minus B, with B on top of the stack
 swap
 -
 byte "LoanThreshold"
 app_global_get
 >=
-//GIL-COMMENT this check could be changed, e.g. payslip 1000£ and required loan 20000£.
-//in that case Payslip can be multiplied by 12 OR loan divided by 12
 bz branch_fail // LoanThreshold <= PaySlip - (RequiredLoan + ExistingLoan)
 load 2
 int 2
@@ -427,7 +387,7 @@ store 3
 load 3
 //Security deposit check: 2*RequiredLoan < LoanFund
 <
-bz branch_fail // 2*RequiredLoan >= LoanFund
+bz branch_fail
 // All checks passed. Update AuthorizedLoan and LoanFund variables and authorize the payment
 byte "LoanFund"
 load 3
@@ -436,7 +396,7 @@ load 2
 app_global_put // update the LoanFund variable
 int 1
 byte "AuthorizedLoan"
-load 2
+load 2// 2*RequiredLoan >= LoanFund
 app_local_put // update local variable AuthorizedLoan of the employee with the RequiredLoan value
 int 1
 return
