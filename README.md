@@ -1,6 +1,7 @@
-# Algorand Beneficial Loans dApp
+# Algorand Employee Loan Arrangment dApp
 
 Algorand dApp solution for beneficial loans management between employers, employees and national authorities.
+Full description of the dApp available on the Algorand Developers Portal (pending review: https://developer.algorand.org/solutions/build-an-employee-loan-arrangement-dapp/).
 
 ## Loan Contract Application Deployment
 
